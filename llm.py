@@ -30,5 +30,5 @@ def get_llm() -> LLM:
         model=f"groq/{MODEL_NAME}",
         api_key=api_key,
         temperature=0.2,
-        max_completion_tokens=2000,
+        max_completion_tokens=1000,
     )
