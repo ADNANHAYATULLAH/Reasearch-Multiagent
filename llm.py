@@ -1,18 +1,20 @@
-
 import os
 
-# CrewAI currently adds cache_breakpoint markers to agent messages.
-# Groq does not accept this field, so disable the marker for Groq.
+# Workaround for a current CrewAI/Groq cache-breakpoint
+# compatibility issue.
 try:
     import crewai.llms.cache as crew_cache
+
     crew_cache.mark_cache_breakpoint = lambda msg: msg
+
 except Exception:
     pass
 
 from crewai import LLM
 
 
-MODEL_NAME = "llama-3.3-70b-versatile"
+# Current Groq production model
+MODEL_NAME = "openai/gpt-oss-120b"
 
 
 def get_llm() -> LLM:
@@ -20,7 +22,8 @@ def get_llm() -> LLM:
 
     if not api_key:
         raise RuntimeError(
-            "GROQ_API_KEY is missing. Add it in Streamlit Secrets."
+            "GROQ_API_KEY is missing. "
+            "Add it in Streamlit Secrets."
         )
 
     return LLM(
