@@ -20,9 +20,9 @@ AGENT_NAMES = [
 
 
 # ---------------------------------------------------------
-# Keep agent-to-agent context small
+# Keep text small
 # ---------------------------------------------------------
-def trim_text(text, max_chars=6000):
+def trim_text(text, max_chars=3500):
     if not text:
         return ""
 
@@ -33,12 +33,12 @@ def trim_text(text, max_chars=6000):
 
     return (
         text[:max_chars]
-        + "\n\n[Additional content was shortened to control token usage.]"
+        + "\n\n[Content shortened to control token usage.]"
     )
 
 
 # ---------------------------------------------------------
-# Wait for Groq rate limits
+# Wait after rate limit
 # ---------------------------------------------------------
 def wait_for_rate_limit(error_text):
     match = re.search(
@@ -49,23 +49,36 @@ def wait_for_rate_limit(error_text):
 
     if match:
         seconds = float(match.group(1))
-        wait_seconds = max(5, seconds + 2)
+        wait_seconds = max(10, seconds + 5)
     else:
         wait_seconds = 20
 
-    print(f"Groq rate limit reached. Waiting {wait_seconds:.1f} seconds...")
+    print(
+        f"Groq rate limit reached. "
+        f"Waiting {wait_seconds:.1f} seconds..."
+    )
+
     time.sleep(wait_seconds)
 
 
 # ---------------------------------------------------------
 # Run one agent
 # ---------------------------------------------------------
-def run_single(agent, description, expected_output):
+def run_single(
+    agent,
+    description,
+    expected_output,
+    max_iterations=1,
+):
+    """
+    Run one CrewAI agent.
 
-    # Limit agent iterations so one agent cannot generate
-    # many unnecessary LLM calls.
+    Non-tool agents use 1 iteration.
+    Tool-using agents can use 2 iterations.
+    """
+
     try:
-        agent.max_iter = 2
+        agent.max_iter = max_iterations
     except Exception:
         pass
 
@@ -83,16 +96,18 @@ def run_single(agent, description, expected_output):
         memory=False,
     )
 
-    # Give Groq some breathing room between agents.
-    time.sleep(8)
+    # Small delay between agents
+    time.sleep(10)
 
-    max_attempts = 3
+    max_attempts = 2
 
     for attempt in range(max_attempts):
+
         try:
             return str(crew.kickoff())
 
         except Exception as e:
+
             error_text = str(e)
 
             if (
@@ -100,13 +115,14 @@ def run_single(agent, description, expected_output):
                 or "rate_limit_exceeded" in error_text
                 or "tokens per minute" in error_text
             ):
+
                 if attempt == max_attempts - 1:
                     raise
 
                 wait_for_rate_limit(error_text)
-                continue
 
-            raise
+            else:
+                raise
 
     raise RuntimeError("Agent execution failed.")
 
@@ -121,19 +137,26 @@ def run_research(
     on_agent_done=None,
 ):
 
+    question = trim_text(question, 1500)
+
     if depth == "Quick":
+
         source_limit = (
-            "Use only a compact set of the most useful sources."
+            "Use only the most important sources. "
+            "Keep everything concise."
         )
 
     elif depth == "Deep":
+
         source_limit = (
-            "Use a broader set of sources, but remain concise."
+            "Use several important sources, "
+            "but keep the output concise."
         )
 
     else:
+
         source_limit = (
-            "Use a balanced set of high-quality sources."
+            "Use a balanced number of high-quality sources."
         )
 
     # =====================================================
@@ -148,31 +171,31 @@ def run_research(
     plan = run_single(
         manager,
         f"""
-User research question:
+Research question:
 
 {question}
 
-Research depth:
-
+Depth:
 {depth}
 
-Create a concise research plan.
+Create a SHORT research plan.
 
 Identify:
-- major sub-questions
-- evidence requirements
+- main sub-questions
+- evidence needed
 - preferred source types
 - important verification points
 
 {source_limit}
 
 Do not write the final report.
-Keep the plan concise.
+Keep the answer under 500 words.
 """,
-        "A concise research plan.",
+        "A short research plan.",
+        max_iterations=1,
     )
 
-    plan = trim_text(plan, 4000)
+    plan = trim_text(plan, 2500)
 
     if on_agent_done:
         on_agent_done(0)
@@ -193,38 +216,38 @@ Research question:
 
 {question}
 
-Research manager plan:
+Research plan:
 
 {plan}
 
 Use your Live Web Search tool.
 
-Actually perform web searches.
+Find the most useful authoritative sources.
 
-Prioritize:
+Prefer:
 - official organizations
-- original research
 - universities
+- original research
 - standards bodies
-- reputable technical documentation
-- authoritative sources
+- official technical documentation
 
-Return:
-- source title
+For each important source provide:
+- title
 - URL
-- date when available
-- concise evidence notes
+- short evidence note
+
+Do not invent URLs.
 
 {source_limit}
 
-Do not invent URLs or facts.
-
-Keep the research dossier concise.
+Keep the research dossier SHORT.
+Maximum about 700 words.
 """,
-        "A concise source-backed research dossier with useful URLs.",
+        "A short source-backed research dossier.",
+        max_iterations=2,
     )
 
-    research = trim_text(research, 6500)
+    research = trim_text(research, 4000)
 
     if on_agent_done:
         on_agent_done(1)
@@ -249,26 +272,25 @@ Research dossier:
 
 {research}
 
-Use your Web Page Reader tool on the most important URLs.
+Use your Web Page Reader tool.
 
-Check the actual pages.
+Check only the most important sources.
 
-Extract concise evidence about:
-- publication date
-- relevant evidence
+For each important source identify:
+- whether it supports the claim
+- important evidence
+- publication date if available
 - source authority
-- context
-- limitations
-- important discrepancies
+- important limitation
 
-Focus only on the most important sources.
-
-Keep the analysis concise.
+Keep the analysis SHORT.
+Do not repeat the entire research dossier.
 """,
-        "A concise source-analysis dossier.",
+        "A short source-analysis report.",
+        max_iterations=2,
     )
 
-    source_analysis = trim_text(source_analysis, 6000)
+    source_analysis = trim_text(source_analysis, 3500)
 
     if on_agent_done:
         on_agent_done(2)
@@ -282,14 +304,19 @@ Keep the analysis concise.
 
     checker = create_fact_checker()
 
+    # IMPORTANT:
+    # The Fact Checker now checks the evidence we already collected.
+    # It does NOT need another web-search cycle.
     fact_check = run_single(
         checker,
         f"""
+Fact-check the following research material.
+
 Research question:
 
 {question}
 
-Original research:
+Research:
 
 {research}
 
@@ -297,25 +324,26 @@ Source analysis:
 
 {source_analysis}
 
-Use Live Web Search to independently verify the most important
-or uncertain claims.
-
-Identify:
+Identify only:
 
 - supported claims
-- unsupported claims
-- conflicting claims
-- outdated information
-- important gaps
+- questionable claims
+- conflicting information
+- missing evidence
+- important limitations
 
-Do not invent evidence.
+Use ONLY the supplied research and source analysis.
 
-Keep the fact-checking memo concise.
+Do not perform additional web searches.
+
+Keep the fact-checking memo SHORT.
+Maximum about 500 words.
 """,
-        "A concise fact-checking memo.",
+        "A short fact-checking memo.",
+        max_iterations=1,
     )
 
-    fact_check = trim_text(fact_check, 5000)
+    fact_check = trim_text(fact_check, 3000)
 
     if on_agent_done:
         on_agent_done(3)
@@ -334,15 +362,11 @@ Keep the fact-checking memo concise.
         f"""
 Write the final research report.
 
-Research question:
+Question:
 
 {question}
 
-Research plan:
-
-{plan}
-
-Web research:
+Research:
 
 {research}
 
@@ -350,34 +374,34 @@ Source analysis:
 
 {source_analysis}
 
-Fact-checking memo:
+Fact-check:
 
 {fact_check}
 
-Create a concise but polished report with:
+Create these sections:
 
 1. Executive Summary
 2. Key Findings
 3. Detailed Analysis
-4. Evidence & Source Notes
-5. Conflicting or Uncertain Information
+4. Evidence & Sources
+5. Uncertainty / Conflicts
 6. Limitations
 7. Conclusion
 8. Sources
 
-Keep the report focused.
+Keep the report concise.
 
-Facts must be traceable to the supplied URLs.
+Use only information supplied above.
 
-Do not create URLs that were not supplied.
+Do not invent URLs.
 
-Clearly label uncertainty.
-Do not present speculation as fact.
+Clearly identify uncertainty.
 """,
-        "A concise polished research report with sources.",
+        "A concise final research report with sources.",
+        max_iterations=1,
     )
 
-    report = trim_text(report, 12000)
+    report = trim_text(report, 9000)
 
     if on_agent_done:
         on_agent_done(4)
@@ -402,12 +426,12 @@ def extract_sources(text):
 
             url = line.split(":", 1)[1].strip()
 
-            if (
-                url.startswith("http://")
-                or url.startswith("https://")
+            if url.startswith(
+                ("http://", "https://")
             ):
 
                 if url not in seen:
+
                     seen.add(url)
 
                     sources.append(
@@ -417,4 +441,4 @@ def extract_sources(text):
                         }
                     )
 
-    return sources[:10]
+    return sources[:8]
