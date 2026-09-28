@@ -1,0 +1,6 @@
+streamlit==1.64.0
+crewai[litellm]==1.15.22
+groq==1.7.0
+ddgs==9.16.0
+requests==2.32.5
+beautifulsoup4==4.14.3
