@@ -21,9 +21,11 @@ def get_llm() -> LLM:
             "GROQ_API_KEY is missing. Add it in Streamlit Secrets."
         )
 
-    return LLM(
-        model=f"groq/{MODEL_NAME}",
-        api_key=api_key,
-        temperature=0.1,
-        max_completion_tokens=800,
+  return LLM(
+    model=f"groq/{MODEL_NAME}",
+    api_key=api_key,
+    temperature=0.1,
+    max_completion_tokens=600,
+    reasoning_effort="low",
+)
     )
