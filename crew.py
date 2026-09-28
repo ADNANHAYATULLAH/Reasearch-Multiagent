@@ -20,9 +20,9 @@ AGENT_NAMES = [
 
 
 # ---------------------------------------------------------
-# Keep text small
+# Keep context VERY small
 # ---------------------------------------------------------
-def trim_text(text, max_chars=3500):
+def trim_text(text, max_chars=2000):
     if not text:
         return ""
 
@@ -33,14 +33,15 @@ def trim_text(text, max_chars=3500):
 
     return (
         text[:max_chars]
-        + "\n\n[Content shortened to control token usage.]"
+        + "\n\n[Content shortened.]"
     )
 
 
 # ---------------------------------------------------------
-# Wait after rate limit
+# Wait for Groq rate limit
 # ---------------------------------------------------------
 def wait_for_rate_limit(error_text):
+
     match = re.search(
         r"try again in ([0-9]+(?:\.[0-9]+)?)s",
         str(error_text),
@@ -49,9 +50,9 @@ def wait_for_rate_limit(error_text):
 
     if match:
         seconds = float(match.group(1))
-        wait_seconds = max(10, seconds + 5)
+        wait_seconds = max(15, seconds + 5)
     else:
-        wait_seconds = 20
+        wait_seconds = 30
 
     print(
         f"Groq rate limit reached. "
@@ -70,12 +71,6 @@ def run_single(
     expected_output,
     max_iterations=1,
 ):
-    """
-    Run one CrewAI agent.
-
-    Non-tool agents use 1 iteration.
-    Tool-using agents can use 2 iterations.
-    """
 
     try:
         agent.max_iter = max_iterations
@@ -96,8 +91,7 @@ def run_single(
         memory=False,
     )
 
-    # Small delay between agents
-    time.sleep(10)
+    time.sleep(12)
 
     max_attempts = 2
 
@@ -114,6 +108,7 @@ def run_single(
                 "RateLimitError" in error_text
                 or "rate_limit_exceeded" in error_text
                 or "tokens per minute" in error_text
+                or "Request too large" in error_text
             ):
 
                 if attempt == max_attempts - 1:
@@ -137,20 +132,18 @@ def run_research(
     on_agent_done=None,
 ):
 
-    question = trim_text(question, 1500)
+    question = trim_text(question, 1000)
 
     if depth == "Quick":
 
         source_limit = (
-            "Use only the most important sources. "
-            "Keep everything concise."
+            "Use only the most important sources."
         )
 
     elif depth == "Deep":
 
         source_limit = (
-            "Use several important sources, "
-            "but keep the output concise."
+            "Use several important sources, but stay concise."
         )
 
     else:
@@ -171,31 +164,29 @@ def run_research(
     plan = run_single(
         manager,
         f"""
-Research question:
-
+Question:
 {question}
 
 Depth:
 {depth}
 
-Create a SHORT research plan.
+Create a short research plan.
 
 Identify:
-- main sub-questions
+- main questions
 - evidence needed
-- preferred source types
-- important verification points
+- source types
+- verification points
 
 {source_limit}
 
-Do not write the final report.
-Keep the answer under 500 words.
+Maximum 300 words.
 """,
         "A short research plan.",
         max_iterations=1,
     )
 
-    plan = trim_text(plan, 2500)
+    plan = trim_text(plan, 1500)
 
     if on_agent_done:
         on_agent_done(0)
@@ -212,42 +203,33 @@ Keep the answer under 500 words.
     research = run_single(
         researcher,
         f"""
-Research question:
-
+Question:
 {question}
 
 Research plan:
-
 {plan}
 
 Use your Live Web Search tool.
 
 Find the most useful authoritative sources.
 
-Prefer:
-- official organizations
-- universities
-- original research
-- standards bodies
-- official technical documentation
-
-For each important source provide:
-- title
+Return only:
+- source title
 - URL
 - short evidence note
 
+Prefer official organizations, universities,
+research papers and technical documentation.
+
 Do not invent URLs.
 
-{source_limit}
-
-Keep the research dossier SHORT.
-Maximum about 700 words.
+Maximum 500 words.
 """,
-        "A short source-backed research dossier.",
+        "A short research dossier with URLs.",
         max_iterations=2,
     )
 
-    research = trim_text(research, 4000)
+    research = trim_text(research, 2500)
 
     if on_agent_done:
         on_agent_done(1)
@@ -261,36 +243,45 @@ Maximum about 700 words.
 
     analyst = create_source_analyst()
 
+    # IMPORTANT:
+    # Remove tools from Source Analyst.
+    #
+    # The Web Researcher already collected the sources.
+    # This prevents CrewAI from sending the large
+    # Web Page Reader tool definition to Groq.
+    try:
+        analyst.tools = []
+    except Exception:
+        pass
+
     source_analysis = run_single(
         analyst,
         f"""
-Research question:
-
+Question:
 {question}
 
-Research dossier:
-
+Research collected by Web Researcher:
 {research}
 
-Use your Web Page Reader tool.
+Analyze the supplied research.
 
-Check only the most important sources.
-
-For each important source identify:
-- whether it supports the claim
-- important evidence
-- publication date if available
+For the most important sources identify:
+- what evidence supports the answer
 - source authority
-- important limitation
+- possible limitations
+- possible inconsistencies
 
-Keep the analysis SHORT.
-Do not repeat the entire research dossier.
+Do NOT search the web.
+
+Use ONLY the supplied research.
+
+Maximum 400 words.
 """,
-        "A short source-analysis report.",
-        max_iterations=2,
+        "A short source analysis.",
+        max_iterations=1,
     )
 
-    source_analysis = trim_text(source_analysis, 3500)
+    source_analysis = trim_text(source_analysis, 1800)
 
     if on_agent_done:
         on_agent_done(2)
@@ -304,46 +295,44 @@ Do not repeat the entire research dossier.
 
     checker = create_fact_checker()
 
-    # IMPORTANT:
-    # The Fact Checker now checks the evidence we already collected.
-    # It does NOT need another web-search cycle.
+    # Remove any web-search tools from Fact Checker.
+    try:
+        checker.tools = []
+    except Exception:
+        pass
+
     fact_check = run_single(
         checker,
         f"""
-Fact-check the following research material.
-
-Research question:
-
+Question:
 {question}
 
 Research:
-
 {research}
 
 Source analysis:
-
 {source_analysis}
 
-Identify only:
+Check the supplied evidence.
 
+Identify:
 - supported claims
 - questionable claims
-- conflicting information
+- contradictions
 - missing evidence
-- important limitations
+- limitations
 
-Use ONLY the supplied research and source analysis.
+Do NOT search the web.
 
-Do not perform additional web searches.
+Use ONLY the supplied material.
 
-Keep the fact-checking memo SHORT.
-Maximum about 500 words.
+Maximum 300 words.
 """,
         "A short fact-checking memo.",
         max_iterations=1,
     )
 
-    fact_check = trim_text(fact_check, 3000)
+    fact_check = trim_text(fact_check, 1500)
 
     if on_agent_done:
         on_agent_done(3)
@@ -360,48 +349,42 @@ Maximum about 500 words.
     report = run_single(
         writer,
         f"""
-Write the final research report.
+Write the final report.
 
 Question:
-
 {question}
 
 Research:
-
 {research}
 
 Source analysis:
-
 {source_analysis}
 
-Fact-check:
-
+Fact check:
 {fact_check}
 
-Create these sections:
+Use these sections:
 
 1. Executive Summary
 2. Key Findings
 3. Detailed Analysis
 4. Evidence & Sources
-5. Uncertainty / Conflicts
+5. Uncertainty
 6. Limitations
 7. Conclusion
 8. Sources
 
-Keep the report concise.
-
-Use only information supplied above.
+Use only the supplied information.
 
 Do not invent URLs.
 
-Clearly identify uncertainty.
+Keep the report concise.
 """,
-        "A concise final research report with sources.",
+        "A concise final research report.",
         max_iterations=1,
     )
 
-    report = trim_text(report, 9000)
+    report = trim_text(report, 6000)
 
     if on_agent_done:
         on_agent_done(4)
